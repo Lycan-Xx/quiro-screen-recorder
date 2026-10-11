@@ -10,6 +10,10 @@ changes.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-11
+
+- Maintenance release.
+
 ## [0.2.0] - 2026-09-24
 
 ### Added
