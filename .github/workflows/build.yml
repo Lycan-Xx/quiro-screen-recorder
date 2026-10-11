@@ -105,6 +105,9 @@ jobs:
           VITE_QUIRO_POSTHOG_API_KEY: ${{ secrets.QUIRO_POSTHOG_API_KEY }}
           # macOS code signing + notarization is deliberately not wired up
           # yet (no certificates until there's an Apple Developer account).
+          # Meanwhile tauri.conf.json ad-hoc signs ("signingIdentity": "-") so
+          # Gatekeeper offers "Open Anyway" instead of calling the app damaged.
+          # APPLE_SIGNING_IDENTITY overrides it once real signing is wired up.
           #
           # These are NOT merely omitted-because-optional: a missing secret
           # expands to an empty string, and the bundler treats "set but
