@@ -10,6 +10,8 @@ changes.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-13
+
 ### Added
 
 - Clicking or dragging on the editor timeline while a video is playing now
