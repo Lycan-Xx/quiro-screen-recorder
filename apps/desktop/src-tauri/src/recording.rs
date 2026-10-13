@@ -85,7 +85,11 @@ struct ActiveRecording {
 async fn lock_mic_feed(
     app_state: &ArcLock<App>,
 ) -> Result<Option<Arc<MicrophoneFeedLock>>, String> {
-    let mic_feed = app_state.read().await.mic_feed.clone();
+    let mic_feed = {
+        let mut app = app_state.write().await;
+        app.ensure_mic_feed_alive().await?;
+        app.mic_feed.clone()
+    };
     match mic_feed.ask(microphone::Lock).await {
         Ok(lock) => Ok(Some(Arc::new(lock))),
         Err(kameo::error::SendError::HandlerError(microphone::LockFeedError::NoInput)) => Ok(None),

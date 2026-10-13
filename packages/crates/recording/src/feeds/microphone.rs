@@ -1516,8 +1516,13 @@ impl Message<GetDroppedMessageCount> for MicrophoneFeed {
     }
 }
 
+// These two arrive via `tell`, and kameo treats an `Err` from a told message as a
+// panic that stops the actor. `Lock` awaits the same shared ready future as the
+// task that sends them, so they routinely land after the feed is already locked;
+// by then they are stale and must be ignored, not returned as `FeedLockedError`,
+// or the next recording fails with "microphone actor not running".
 impl Message<InputConnected> for MicrophoneFeed {
-    type Reply = Result<(), FeedLockedError>;
+    type Reply = ();
 
     async fn handle(
         &mut self,
@@ -1526,16 +1531,14 @@ impl Message<InputConnected> for MicrophoneFeed {
     ) -> Self::Reply {
         trace!("MicrophoneFeed.InputConnected");
 
-        let state = self.state.try_as_open()?;
-
-        state.handle_input_connected(msg);
-
-        Ok(())
+        if let Ok(state) = self.state.try_as_open() {
+            state.handle_input_connected(msg);
+        }
     }
 }
 
 impl Message<InputConnectFailed> for MicrophoneFeed {
-    type Reply = Result<(), FeedLockedError>;
+    type Reply = ();
 
     async fn handle(
         &mut self,
@@ -1544,15 +1547,12 @@ impl Message<InputConnectFailed> for MicrophoneFeed {
     ) -> Self::Reply {
         trace!("MicrophoneFeed.InputConnectFailed");
 
-        let state = self.state.try_as_open()?;
-
-        if let Some(connecting) = &state.connecting
+        if let Ok(state) = self.state.try_as_open()
+            && let Some(connecting) = &state.connecting
             && connecting.id == msg.id
         {
             state.connecting = None;
         }
-
-        Ok(())
     }
 }
 
@@ -1629,6 +1629,48 @@ mod tests {
         }
 
         result
+    }
+
+    #[tokio::test]
+    async fn stale_connection_events_do_not_stop_locked_feed() {
+        let (error_tx, _error_rx) = flume::bounded(1);
+        let mut feed = MicrophoneFeed::new(error_tx);
+        let config = SupportedStreamConfig::new(
+            1,
+            cpal::SampleRate(48_000),
+            cpal::SupportedBufferSize::Unknown,
+            SampleFormat::F32,
+        );
+        let (done_tx, _done_rx) = mpsc::sync_channel(0);
+        let token = Arc::new(());
+        feed.state = State::Locked {
+            inner: AttachedState {
+                id: 0,
+                label: "mic".to_string(),
+                config: config.clone(),
+                buffer_size_frames: None,
+                done_tx: done_tx.clone(),
+            },
+            token: Arc::downgrade(&token),
+        };
+        let actor = MicrophoneFeed::spawn(feed);
+
+        actor
+            .tell(InputConnected {
+                id: 0,
+                label: "mic".to_string(),
+                config,
+                buffer_size_frames: None,
+                done_tx,
+            })
+            .await
+            .unwrap();
+        actor.tell(InputConnectFailed { id: 0 }).await.unwrap();
+
+        assert!(
+            actor.ask(GetDroppedMessageCount).await.is_ok(),
+            "a connection event arriving after Lock must not stop the feed"
+        );
     }
 
     #[test]

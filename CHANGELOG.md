@@ -10,6 +10,14 @@ changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Starting a recording soon after choosing a microphone no longer fails with
+  "microphone actor not running". A late stream-ready event reached the
+  microphone after it locked for recording and stopped it. Starting a
+  recording now also restarts the microphone if it has stopped, instead of
+  failing until you pick the microphone again.
+
 ## [0.2.1] - 2026-10-11
 
 - Maintenance release.
