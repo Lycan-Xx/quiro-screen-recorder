@@ -292,17 +292,6 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 		});
 	}, []);
 
-	const seek = useCallback(
-		(time: number) => {
-			const clamped = Math.max(0, time);
-			playback.setTime(clamped);
-			void commands.setPlayheadPosition(Math.floor(clamped * FPS));
-			// Playback drives its own frames; a manual request would fight it.
-			if (!playingRef.current) requestFrame(clamped);
-		},
-		[requestFrame, playback],
-	);
-
 	// Must match `TimelineConfiguration::duration()` — playback ends where the
 	// backend says it does, and transitions overlap their clips, so a plain sum
 	// of segment lengths reads longer than the video actually is.
@@ -367,6 +356,54 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 		pendingLiveProjectRef.current = latest;
 		await flushLiveProject();
 	}, [flushLiveProject]);
+
+	// A running playback owns the playhead and ignores position changes, so
+	// seeking while playing restarts it at the target. Clicks and playhead drags
+	// arrive faster than a restart completes; only the latest target is kept.
+	const seekTargetRef = useRef<number | null>(null);
+	const seekRestartRef = useRef<Promise<void> | null>(null);
+	const restartPlaybackAtSeekTarget = useCallback(() => {
+		if (seekRestartRef.current) return;
+		seekRestartRef.current = (async () => {
+			try {
+				while (seekTargetRef.current !== null) {
+					const target = seekTargetRef.current;
+					seekTargetRef.current = null;
+					await commands.stopPlayback();
+					await syncLatestProject();
+					await commands.setPlayheadPosition(Math.floor(target * FPS));
+					// Paused while this was in flight: leave it stopped at the target.
+					if (!playingRef.current) {
+						requestFrame(target);
+						return;
+					}
+					await commands.startPlayback(
+						FPS,
+						getPreviewResolution(previewQualityRef.current),
+					);
+				}
+			} catch (error) {
+				console.error("Failed to seek during playback:", error);
+			} finally {
+				seekRestartRef.current = null;
+			}
+		})();
+	}, [requestFrame, syncLatestProject]);
+
+	const seek = useCallback(
+		(time: number) => {
+			const clamped = Math.max(0, time);
+			playback.setTime(clamped);
+			if (playingRef.current) {
+				seekTargetRef.current = clamped;
+				restartPlaybackAtSeekTarget();
+				return;
+			}
+			void commands.setPlayheadPosition(Math.floor(clamped * FPS));
+			requestFrame(clamped);
+		},
+		[requestFrame, playback, restartPlaybackAtSeekTarget],
+	);
 
 	const togglePlay = useCallback(() => {
 		if (importInProgressRef.current) return;
