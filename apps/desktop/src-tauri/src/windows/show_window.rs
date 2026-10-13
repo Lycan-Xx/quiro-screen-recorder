@@ -89,7 +89,7 @@ impl ShowQuiroWindow {
         if matches!(self, Self::Settings { .. }) {
             remember_settings_origin(app);
             hide_recording_windows(app, true);
-            release_camera_preview_if_idle(app);
+            release_inputs_if_idle(app);
         }
 
         if let Some(result) = variants::recording_controls::try_reuse(self, app).await {

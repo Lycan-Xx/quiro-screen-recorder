@@ -50,37 +50,37 @@ pub(crate) fn hide_recording_windows(app: &AppHandle, restore_target_select_over
     }
 }
 
-/// Release the live camera preview feed after `hide_recording_windows` when a
-/// foreground window (Settings, an editor) takes over. Hiding the camera window
-/// alone leaves the capture session running, so the OS camera-in-use indicator
-/// stays lit while the user is in the editor. `restore_main_window_inputs`
-/// re-attaches the feed when the main window comes back.
-pub(crate) fn release_camera_preview_if_idle(app: &AppHandle) {
-    let is_recording = app
-        .try_state::<ArcLock<App>>()
-        .and_then(|state| {
-            state
-                .try_read()
-                .ok()
-                .map(|state| state.is_recording_active_or_pending())
-        })
-        .unwrap_or(true);
-
-    if is_recording {
-        return;
-    }
-
+/// Release the camera and microphone when a foreground window (Settings, an
+/// editor) takes over from the main window. Hiding windows alone leaves both
+/// capture sessions running, so the OS in-use indicators stay lit while the user
+/// is in the editor. The selections are kept: `restore_main_window_inputs`
+/// re-attaches both when the main window comes back.
+pub(crate) fn release_inputs_if_idle(app: &AppHandle) {
     let app = app.clone();
     tokio::spawn(async move {
-        if let Some(state) = app.try_state::<ArcLock<App>>() {
-            let app_state = &mut *state.write().await;
-            app_state.camera_preview.pause();
-            let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
-            app_state.camera_in_use = false;
-        } else {
-            warn!("App state unavailable while pausing camera preview");
+        let Some(state) = app.try_state::<ArcLock<App>>() else {
+            warn!("App state unavailable while releasing inputs");
+            return;
+        };
+        let app_state = &mut *state.write().await;
+        if app_state.is_recording_active_or_pending() {
+            return;
         }
+
+        for window in camera_webview_windows(&app) {
+            let _ = window.hide();
+        }
+        app_state.camera_preview.pause();
+        let _ = app_state.camera_feed.ask(feeds::camera::RemoveInput).await;
+        app_state.camera_in_use = false;
+        let _ = app_state.mic_feed.ask(feeds::microphone::RemoveInput).await;
     });
+}
+
+fn main_window_visible(app: &AppHandle) -> bool {
+    WindowId::Main
+        .get(app)
+        .is_some_and(|window| window.is_visible().unwrap_or(false))
 }
 
 pub(crate) fn bump_camera_window_session(app: &AppHandle) -> u64 {
@@ -281,6 +281,21 @@ pub(crate) async fn ensure_camera_input_active(app_state: &mut App) {
 }
 
 pub(crate) async fn restore_main_window_inputs(app: &AppHandle) {
+    if !main_window_visible(app) {
+        return;
+    }
+
+    attach_main_window_inputs(app).await;
+
+    // stop_recording shows the main window and the editor hides it moments later,
+    // often while the attach above is still running; whatever it attached after
+    // the editor's release would otherwise stay live under the editor.
+    if !main_window_visible(app) {
+        release_inputs_if_idle(app);
+    }
+}
+
+async fn attach_main_window_inputs(app: &AppHandle) {
     let Some(state) = app.try_state::<ArcLock<App>>() else {
         warn!("App state unavailable while restoring main window inputs");
         return;
@@ -510,6 +525,7 @@ pub(crate) fn hide_main_window_for_editor(app: &AppHandle) {
     if let Some(main) = WindowId::Main.get(app) {
         let _ = main.hide();
     }
+    release_inputs_if_idle(app);
 }
 
 static SETTINGS_ORIGIN: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
