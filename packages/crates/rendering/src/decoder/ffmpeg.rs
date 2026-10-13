@@ -280,6 +280,8 @@ impl FfmpegDecoder {
             // Previous vended frame number since the last reset, for pts-hole
             // discovery (the reader vends in pts order between resets).
             let mut prev_vended: Option<u32> = None;
+            // Last frame number the reader vended, i.e. where decoding resumes.
+            let mut stream_frame: Option<u32> = None;
 
             let last_sent_frame = Rc::new(RefCell::new(None::<OutputFrame>));
             let first_ever_frame = Rc::new(RefCell::new(None::<OutputFrame>));
@@ -311,6 +313,7 @@ impl FfmpegDecoder {
                 let mut sw_gap_hold: Option<OutputFrame> = None;
                 // Previous vended frame number since the last reset.
                 let mut sw_prev_vended: Option<u32> = None;
+                let mut sw_stream_frame: Option<u32> = None;
                 let sw_last_sent_frame = Rc::new(RefCell::new(None::<OutputFrame>));
                 let sw_first_ever_frame = Rc::new(RefCell::new(None::<OutputFrame>));
                 let mut sw_frames = sw_this.frames();
@@ -330,6 +333,7 @@ impl FfmpegDecoder {
                     // The pre-decoded frame is a real vend: without seeding
                     // this, an opening static hold would never be recorded.
                     sw_prev_vended = Some(current_frame);
+                    sw_stream_frame = Some(current_frame);
                 }
 
                 let sw_decoder_type = DecoderType::FFmpegSoftware;
@@ -433,6 +437,7 @@ impl FfmpegDecoder {
                             *sw_last_sent_frame.borrow_mut() = None;
                             sw_cache.clear();
                             sw_prev_vended = None;
+                            sw_stream_frame = None;
                         }
 
                         // Requests inside a KNOWN pts hole are answered with the
@@ -502,12 +507,17 @@ impl FfmpegDecoder {
                             },
                         );
 
-                        if is_far_forward {
+                        // Same reader-position guard as the hardware path.
+                        let reader_past_request =
+                            sw_stream_frame.is_some_and(|frame| frame >= requested_frame);
+
+                        if is_far_forward || reader_past_request {
                             let _ = sw_this.reset(requested_time);
                             sw_frames = sw_this.frames();
                             *sw_last_sent_frame.borrow_mut() = None;
                             sw_cache.clear();
                             sw_prev_vended = None;
+                            sw_stream_frame = None;
                         }
 
                         let mut exit = false;
@@ -547,6 +557,7 @@ impl FfmpegDecoder {
                                 record_pts_hole(&mut sw_pts_holes, prev, current_frame);
                             }
                             sw_prev_vended = Some(current_frame);
+                            sw_stream_frame = Some(current_frame);
 
                             let mut cache_frame = CachedFrame::Raw {
                                 frame,
@@ -782,6 +793,7 @@ impl FfmpegDecoder {
                 // The pre-decoded frame is a real vend: without seeding this,
                 // an opening static hold would never be recorded.
                 prev_vended = Some(current_frame);
+                stream_frame = Some(current_frame);
                 info!(
                     "FFmpeg decoder '{}': pre-decoded first frame {} ({}x{})",
                     name, current_frame, video_width, video_height
@@ -892,6 +904,7 @@ impl FfmpegDecoder {
                         *last_sent_frame.borrow_mut() = None;
                         cache.clear();
                         prev_vended = None;
+                        stream_frame = None;
                     }
 
                     // Requests inside a KNOWN pts hole are answered with the
@@ -965,12 +978,22 @@ impl FfmpegDecoder {
                         },
                     );
 
-                    if is_far_forward {
+                    // A backward request served from the cache or the first frame leaves
+                    // the reader where it was, past the request. Decoding forward from
+                    // there can never reach the requested frame, so every request
+                    // collapsed onto the newest at-or-before frame until one landed a
+                    // full cache window past it: entering a clip whose decoder had
+                    // already been used further in froze it for ~90 frames.
+                    let reader_past_request =
+                        stream_frame.is_some_and(|frame| frame >= requested_frame);
+
+                    if is_far_forward || reader_past_request {
                         let _ = this.reset(requested_time);
                         frames = this.frames();
                         *last_sent_frame.borrow_mut() = None;
                         cache.clear();
                         prev_vended = None;
+                        stream_frame = None;
                     }
 
                     let mut exit = false;
@@ -1008,6 +1031,7 @@ impl FfmpegDecoder {
                             record_pts_hole(&mut pts_holes, prev, current_frame);
                         }
                         prev_vended = Some(current_frame);
+                        stream_frame = Some(current_frame);
 
                         let mut cache_frame = CachedFrame::Raw {
                             frame,
@@ -1277,3 +1301,115 @@ impl FfmpegDecoder {
 //         }
 //     }
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ffmpeg::{codec, encoder, format::Pixel};
+
+    const FPS: u32 = 30;
+    const SIZE: u32 = 64;
+
+    fn level(frame: u32) -> u8 {
+        (16 + frame * 2) as u8
+    }
+
+    fn write_test_video(path: &std::path::Path, frames: u32) {
+        ffmpeg::init().unwrap();
+        let mut output = format::output(path).unwrap();
+        let codec = encoder::find(codec::Id::MPEG4).unwrap();
+        let global_header = output
+            .format()
+            .flags()
+            .contains(format::Flags::GLOBAL_HEADER);
+
+        let mut encoder = codec::context::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+            .unwrap();
+        encoder.set_width(SIZE);
+        encoder.set_height(SIZE);
+        encoder.set_format(Pixel::YUV420P);
+        encoder.set_time_base((1, FPS as i32));
+        encoder.set_frame_rate(Some((FPS as i32, 1)));
+        encoder.set_bit_rate(4_000_000);
+        encoder.set_gop(15);
+        if global_header {
+            unsafe {
+                (*encoder.as_mut_ptr()).flags |= ffmpeg::ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+            }
+        }
+        let mut encoder = encoder.open_as(codec).unwrap();
+
+        let mut stream = output.add_stream(codec).unwrap();
+        stream.set_time_base((1, FPS as i32));
+        stream.set_parameters(&encoder);
+        output.write_header().unwrap();
+        let stream_time_base = output.stream(0).unwrap().time_base();
+
+        let drain = |encoder: &mut encoder::video::Encoder,
+                     output: &mut format::context::Output| {
+            let mut packet = ffmpeg::Packet::empty();
+            while encoder.receive_packet(&mut packet).is_ok() {
+                packet.set_stream(0);
+                packet.rescale_ts((1, FPS as i32), stream_time_base);
+                packet.write_interleaved(output).unwrap();
+            }
+        };
+
+        for i in 0..frames {
+            let mut frame = frame::Video::new(Pixel::YUV420P, SIZE, SIZE);
+            frame.data_mut(0).fill(level(i));
+            frame.data_mut(1).fill(128);
+            frame.data_mut(2).fill(128);
+            frame.set_pts(Some(i as i64));
+            encoder.send_frame(&frame).unwrap();
+            drain(&mut encoder, &mut output);
+        }
+        encoder.send_eof().unwrap();
+        drain(&mut encoder, &mut output);
+        output.write_trailer().unwrap();
+    }
+
+    fn decoded_index(frame: &DecodedFrame) -> u32 {
+        let center = (SIZE / 2 * frame.y_stride() + SIZE / 2) as usize;
+        let y = frame
+            .y_plane()
+            .map_or_else(|| frame.data()[0], |plane| plane[center]);
+        ((y as f32 - 16.0) / 2.0).round() as u32
+    }
+
+    #[test]
+    fn entering_a_clip_after_its_decoder_was_used_further_in_returns_each_frame() {
+        let path = std::env::temp_dir().join(format!(
+            "quiro-decoder-reposition-{}.mp4",
+            std::process::id()
+        ));
+        write_test_video(&path, 120);
+
+        let (tx, rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = oneshot::channel();
+        FfmpegDecoder::spawn_with_hw_config("test", path.clone(), FPS, rx, ready_tx, false)
+            .unwrap();
+        ready_rx.blocking_recv().unwrap().unwrap();
+
+        let get = |frame: u32| {
+            let (reply_tx, reply_rx) = oneshot::channel();
+            tx.send(VideoDecoderMessage::GetFrame(
+                frame as f32 / FPS as f32,
+                4,
+                reply_tx,
+            ))
+            .unwrap();
+            decoded_index(&reply_rx.blocking_recv().unwrap())
+        };
+
+        // A preview or scrub further into the clip leaves the reader there.
+        assert_eq!(get(100), 100);
+
+        // Playback then enters the clip from its start.
+        let served: Vec<u32> = (0..12).map(get).collect();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(served, (0..12).collect::<Vec<_>>());
+    }
+}
