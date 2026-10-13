@@ -10,6 +10,32 @@ changes.
 
 ## [Unreleased]
 
+### Added
+
+- Clicking or dragging on the editor timeline while a video is playing now
+  jumps there and keeps playing, instead of being ignored until you pause.
+
+### Changed
+
+- On Windows, when the camera won't start because another app has it, the
+  error now names that app (for example, "The camera is in use by Firefox").
+- Messages outside the editors (the launch window, the recordings list, and
+  Settings) now show as system notifications instead of in-window toasts,
+  which got cut off in small windows. They fall back to toasts when
+  notifications are turned off in Settings.
+
+### Fixed
+
+- Playing from one clip into the next no longer freezes the second clip on its
+  first frame for up to three seconds (and makes zooms over it appear to
+  shake). This happened when the second clip had already been previewed
+  further in; its decoder kept reading from that later point and could not
+  return the earlier frames playback asked for.
+- The microphone and camera are released when a recording ends and the
+  editor opens, so the system's in-use indicators turn off. They reconnect
+  when you return to the main window. Opening Settings now releases the
+  microphone too, not just the camera.
+
 ## [0.2.3] - 2026-10-13
 
 ### Fixed
