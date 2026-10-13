@@ -100,6 +100,5 @@ Release and skips the R2 push, so auto-update stays inert.
   Windows, macOS, and Linux.
 - **`build.yml`** is the reusable engine (`workflow_call`) shared by
   `release.yml` and `nightly.yml`. Don't trigger it directly.
-- **`web.yml`** builds the static marketing site for website changes and deploys
-  it to Cloudflare Pages on `main` when the Pages repository settings are
-  configured.
+- **`web.yml`** builds the marketing site on website changes to `main`. Vercel
+  deploys it (`apps/web/vercel.json`); the workflow only catches build breakage.
