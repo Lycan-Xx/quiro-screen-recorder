@@ -29,11 +29,7 @@ pub async fn list_cameras() -> Vec<CameraInfo> {
 }
 
 pub(crate) fn list_audio_devices_blocking() -> Vec<String> {
-    let Ok(devices) = cpal::default_host().input_devices() else {
-        return Vec::new();
-    };
-
-    devices.filter_map(|device| device.name().ok()).collect()
+    quiro_recording::feeds::microphone::MicrophoneFeed::list_names()
 }
 
 #[tauri::command]

@@ -10,6 +10,15 @@ changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Choosing a microphone is near-instant on devices with slow format probing,
+  such as Intel Smart Sound mics, instead of stalling for 30 seconds or more.
+  Quiro no longer tries every audio format on every input just to list
+  microphones, only probes the selected one, and does that off the
+  microphone's message loop. The background device watcher stops
+  continuously re-probing the microphone, too.
+
 ## [0.2.2] - 2026-10-13
 
 ### Fixed

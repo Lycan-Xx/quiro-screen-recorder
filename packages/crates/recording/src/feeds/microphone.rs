@@ -548,18 +548,42 @@ fn list_input_device_names() -> Vec<String> {
         names.insert(name, ());
     }
 
-    match host.input_devices() {
-        Ok(devices) => {
-            for name in devices.filter_map(|device| device.name().ok()) {
-                names.entry(name).or_insert(());
-            }
-        }
-        Err(error) => {
-            error!("Could not access audio input devices: {}", error);
-        }
+    for name in input_devices(&host).filter_map(|device| device.name().ok()) {
+        names.entry(name).or_insert(());
     }
 
     names.into_keys().collect()
+}
+
+// cpal's `input_devices` keeps a device only once `supported_input_configs` yields one,
+// and on WASAPI that trials ~70 formats through `IsFormatSupported`: about 9s per device
+// on Intel Smart Sound mics. `default_input_config` is a single `GetMixFormat` that fails
+// for non-capture endpoints, so it selects the same devices without the probe.
+fn input_devices(host: &cpal::Host) -> impl Iterator<Item = Device> {
+    let devices = host
+        .devices()
+        .map_err(|error| error!("Could not access audio input devices: {}", error))
+        .ok();
+
+    devices
+        .into_iter()
+        .flatten()
+        .filter(|device| device.default_input_config().is_ok())
+}
+
+fn find_input_device(
+    label: &str,
+    settings: Option<&MicrophoneDeviceSettings>,
+) -> Option<(Device, SupportedStreamConfig)> {
+    let host = cpal::default_host();
+    let is_label = |device: &Device| device.name().is_ok_and(|name| name == label);
+
+    let device = host
+        .default_input_device()
+        .filter(is_label)
+        .or_else(|| input_devices(&host).find(is_label))?;
+
+    get_usable_device(device, settings).map(|(_, device, config)| (device, config))
 }
 
 impl MicrophoneFeed {
@@ -602,17 +626,10 @@ impl MicrophoneFeed {
             device_map.insert(name, (device, config));
         }
 
-        match host.input_devices() {
-            Ok(devices) => {
-                for (name, device, config) in
-                    devices.filter_map(|device| get_usable_device(device, settings))
-                {
-                    device_map.entry(name).or_insert((device, config));
-                }
-            }
-            Err(error) => {
-                error!("Could not access audio input devices: {}", error);
-            }
+        for (name, device, config) in
+            input_devices(&host).filter_map(|device| get_usable_device(device, settings))
+        {
+            device_map.entry(name).or_insert((device, config));
         }
 
         device_map
@@ -622,53 +639,46 @@ impl MicrophoneFeed {
         let StreamSpawnParams {
             id,
             label,
-            device,
-            config,
-            stream_config,
-            buffer_size_frames,
-            sample_format,
+            settings,
+            replaces,
             actor_ref,
             error_sender,
             dropped_message_count,
             log_action,
         } = params;
 
-        let (ready_tx, ready_rx) = oneshot::channel::<Result<Option<u32>, SetInputError>>();
+        let (ready_tx, ready_rx) =
+            oneshot::channel::<Result<(SupportedStreamConfig, Option<u32>), SetInputError>>();
         let (done_tx, done_rx) = mpsc::sync_channel(0);
 
-        let ready = {
-            let config_for_ready = config.clone();
-            ready_rx
-                .map(move |v| {
-                    let config = config_for_ready.clone();
-                    v.map_err(|_| SetInputError::BuildStreamCrashed)
-                        .and_then(|inner| inner)
-                        .map(|buffer_size| (config, buffer_size))
-                })
-                .boxed()
-        };
+        let ready = ready_rx
+            .map(|v| {
+                v.map_err(|_| SetInputError::BuildStreamCrashed)
+                    .and_then(|inner| inner)
+            })
+            .boxed();
 
+        // Device lookup and format probing run here rather than in the actor: on some
+        // WASAPI drivers the probe takes seconds, and the actor must keep forwarding
+        // samples meanwhile.
         std::thread::spawn({
-            let stream_config = stream_config.clone();
-            let config = config.clone();
             let actor_ref = actor_ref.clone();
             let error_sender = error_sender.clone();
             let dropped_message_count = dropped_message_count.clone();
             move || {
-                let device_name_for_log = device.name().ok();
+                let Some((device, config)) = find_input_device(&label, settings.as_ref()) else {
+                    let _ = ready_tx.send(Err(SetInputError::DeviceNotFound));
+                    return;
+                };
+                let sample_format = config.sample_format();
+                let (stream_config, buffer_size_frames) =
+                    stream_config_with_latency(&config, Some(&label));
 
-                if let Some(ref name) = device_name_for_log {
-                    info!("Device '{}' available configs:", name);
-                    for config in device.supported_input_configs().into_iter().flatten() {
-                        info!(
-                            "  Format: {:?}, Min rate: {}, Max rate: {}, Sample size: {}",
-                            config.sample_format(),
-                            config.min_sample_rate().0,
-                            config.max_sample_rate().0,
-                            config.sample_format().sample_size()
-                        );
-                    }
+                if let Some(replaces) = replaces {
+                    let _ = replaces.send(());
                 }
+
+                let device_name_for_log = device.name().ok();
 
                 let buffer_size_description = match &stream_config.buffer_size {
                     BufferSize::Default => "default".to_string(),
@@ -806,7 +816,7 @@ impl MicrophoneFeed {
                     return;
                 }
 
-                let _ = ready_tx.send(Ok(buffer_size_frames));
+                let _ = ready_tx.send(Ok((config.clone(), buffer_size_frames)));
 
                 match done_rx.recv() {
                     Ok(_) => debug!("Microphone actor shut down, ending stream"),
@@ -1136,11 +1146,8 @@ impl StreamLogAction {
 struct StreamSpawnParams {
     id: u32,
     label: String,
-    device: Device,
-    config: SupportedStreamConfig,
-    stream_config: cpal::StreamConfig,
-    buffer_size_frames: Option<u32>,
-    sample_format: SampleFormat,
+    settings: Option<MicrophoneDeviceSettings>,
+    replaces: Option<SyncSender<()>>,
     actor_ref: ActorRef<MicrophoneFeed>,
     error_sender: flume::Sender<StreamError>,
     dropped_message_count: Arc<AtomicU64>,
@@ -1181,25 +1188,13 @@ impl Message<SetInput> for MicrophoneFeed {
                 self.input_id_counter += 1;
 
                 let label = msg.label.clone();
-                let Some((device, config)) =
-                    Self::list_with_settings(msg.settings.as_ref()).swap_remove(&label)
-                else {
-                    return Err(SetInputError::DeviceNotFound);
-                };
-
-                let sample_format = config.sample_format();
-                let (stream_config, buffer_size_frames) =
-                    stream_config_with_latency(&config, Some(&label));
 
                 let actor_ref = ctx.actor_ref();
                 let (ready_future, done_tx) = Self::spawn_input_stream(StreamSpawnParams {
                     id,
                     label: label.clone(),
-                    device,
-                    config,
-                    stream_config,
-                    buffer_size_frames,
-                    sample_format,
+                    settings: msg.settings,
+                    replaces: None,
                     actor_ref: actor_ref.clone(),
                     error_sender: self.error_sender.clone(),
                     dropped_message_count: self.dropped_message_count.clone(),
@@ -1268,30 +1263,16 @@ impl Message<SetInput> for MicrophoneFeed {
                 }
 
                 let label = msg.label.clone();
-                let Some((device, config)) =
-                    Self::list_with_settings(msg.settings.as_ref()).swap_remove(&label)
-                else {
-                    return Err(SetInputError::DeviceNotFound);
-                };
-
-                let sample_format = config.sample_format();
-                let (stream_config, buffer_size_frames) =
-                    stream_config_with_latency(&config, Some(&label));
 
                 let new_id = self.input_id_counter;
                 self.input_id_counter += 1;
-
-                let _ = inner.done_tx.send(());
 
                 let actor_ref = ctx.actor_ref();
                 let (ready_future, done_tx) = Self::spawn_input_stream(StreamSpawnParams {
                     id: new_id,
                     label: label.clone(),
-                    device,
-                    config,
-                    stream_config,
-                    buffer_size_frames,
-                    sample_format,
+                    settings: msg.settings,
+                    replaces: Some(inner.done_tx.clone()),
                     actor_ref: actor_ref.clone(),
                     error_sender: self.error_sender.clone(),
                     dropped_message_count: self.dropped_message_count.clone(),
