@@ -1,8 +1,9 @@
-import { Button, toast } from "@quiro/ui";
+import { Button } from "@quiro/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
 import { type ReactNode, useMemo, useState } from "react";
 import { TargetCardSkeleton } from "@/routes/launch/TargetCard";
+import { notify } from "@/utils/notify";
 import type { RecordingWithPath, ScreenshotWithPath } from "@/utils/queries";
 import IconLucideImport from "~icons/lucide/import";
 import IconLucideSearch from "~icons/lucide/search";
@@ -75,11 +76,11 @@ export function MediaManager<T extends MediaItem>({
 		try {
 			await importCommand(selected);
 			refetch();
-			toast.success("Imported");
+			notify.success("Imported");
 		} catch (error) {
 			// The Rust side returns why it declined — unsupported container,
 			// unreadable file — which is more useful than a generic failure.
-			toast.error(String(error));
+			notify.error(String(error));
 		} finally {
 			setImporting(false);
 		}

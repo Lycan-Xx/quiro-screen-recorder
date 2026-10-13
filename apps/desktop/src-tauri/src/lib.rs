@@ -9,6 +9,7 @@ mod capture;
 mod capture_targets;
 mod clip_thumbnails;
 mod crash_sentinel;
+mod device_usage;
 mod devices;
 mod diagnostics;
 mod editor;
@@ -326,7 +327,7 @@ pub struct NewNotification {
 /// an in-app toast would go unseen until the recording ends, if it survived
 /// that long at all. Respects `enable_notifications`, defaulting to on to
 /// match `GeneralSettingsStore`'s own default.
-pub(crate) fn notify_user(app: &AppHandle, title: &str, body: &str, is_error: bool) {
+pub(crate) fn notify_user(app: &AppHandle, title: &str, body: &str, is_error: bool) -> bool {
     let _ = NewNotification {
         title: title.to_string(),
         body: body.to_string(),
@@ -339,13 +340,29 @@ pub(crate) fn notify_user(app: &AppHandle, title: &str, body: &str, is_error: bo
         .flatten()
         .is_none_or(|settings| settings.enable_notifications);
     if !enabled {
-        return;
+        return false;
     }
 
     use tauri_plugin_notification::NotificationExt;
-    if let Err(err) = app.notification().builder().title(title).body(body).show() {
-        warn!(%err, "Failed to show OS notification");
+    let mut builder = app.notification().builder().title(title);
+    if !body.is_empty() {
+        builder = builder.body(body);
     }
+    match builder.show() {
+        Ok(()) => true,
+        Err(err) => {
+            warn!(%err, "Failed to show OS notification");
+            false
+        }
+    }
+}
+
+/// Returns whether an OS notification was shown, so the caller can fall back to
+/// an in-window toast when notifications are disabled or unavailable.
+#[tauri::command]
+#[specta::specta]
+fn show_notification(app: AppHandle, title: String, body: Option<String>, is_error: bool) -> bool {
+    notify_user(&app, &title, body.as_deref().unwrap_or_default(), is_error)
 }
 
 #[derive(Deserialize, Serialize, Type, tauri_specta::Event, Debug, Clone)]
@@ -384,6 +401,12 @@ pub(crate) fn camera_preview_error_message(err: &str) -> String {
         return "This camera is no longer available. Check that it is connected and allowed by system permissions.".to_string();
     }
 
+    if (err.contains("CameraTimeout") || err.contains("StartCapturing"))
+        && let Some(message) = camera_in_use_message()
+    {
+        return message;
+    }
+
     if err.contains("CameraTimeout") {
         return "No frames were received from this camera. It may be closed, disconnected, covered, or in use by another app.".to_string();
     }
@@ -404,6 +427,18 @@ pub(crate) fn camera_preview_error_message(err: &str) -> String {
 
     "The selected camera could not be started. Choose another camera or reconnect this one."
         .to_string()
+}
+
+fn camera_in_use_message() -> Option<String> {
+    let apps = device_usage::apps_using("webcam");
+    let names = match apps.as_slice() {
+        [] => return None,
+        [app] => app.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    Some(format!(
+        "The camera is in use by {names}. Close the camera there, then select it again in Quiro."
+    ))
 }
 
 pub(crate) fn emit_camera_preview_error(app_handle: &AppHandle, message: String) {
@@ -1274,6 +1309,7 @@ fn specta_bindings() -> tauri_specta::Builder {
             library::list_screenshots,
             diagnostics::get_system_diagnostics,
             diagnostics::get_logs_dir,
+            show_notification,
             general_settings::get_default_excluded_windows,
             recording_settings::set_recording_mode,
             target_select_overlay::get_window_icon,

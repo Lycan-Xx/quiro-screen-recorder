@@ -1,8 +1,9 @@
 import "./shortcuts.css";
-import { cn, toast } from "@quiro/ui";
+import { cn } from "@quiro/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type as osType } from "@tauri-apps/plugin-os";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { notify } from "@/utils/notify";
 import { commands, type Hotkey, type HotkeyAction } from "@/utils/tauri";
 import IconLucideX from "~icons/lucide/x";
 import IconCheck from "~icons/ph/check-circle-fill";
@@ -345,7 +346,7 @@ export default function ShortcutsSettings() {
 											disabled={!hotkey}
 											onClick={() =>
 												void apply(action, null).then(
-													(error) => error && toast.error(error),
+													(error) => error && notify.error(error),
 												)
 											}
 											className="shortcut-clear"

@@ -1,7 +1,8 @@
-import { Button, toast } from "@quiro/ui";
+import { Button } from "@quiro/ui";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import type { PropsWithChildren } from "react";
 import { ErrorBoundary } from "react-error-boundary";
+import { notify } from "@/utils/notify";
 import { captureDesktopException } from "@/utils/posthog";
 import ClipboardCopyIcon from "~icons/lucide/clipboard-copy";
 import TriangleAlertIcon from "~icons/lucide/triangle-alert";
@@ -33,10 +34,10 @@ function Crashed({ error }: { error: unknown }) {
 			// boundary must still work if the crash happened before Tauri's IPC
 			// bridge finished initializing.
 			await navigator.clipboard.writeText(trace);
-			toast.success("Error details copied");
+			notify.success("Error details copied");
 		} catch (error) {
 			console.error("Failed to copy error details to clipboard:", error);
-			toast.error("Couldn't copy to clipboard");
+			notify.error("Couldn't copy to clipboard");
 		}
 	};
 

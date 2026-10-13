@@ -550,6 +550,13 @@ async getLogsDir() : Promise<Result<string, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+/**
+ * Returns whether an OS notification was shown, so the caller can fall back to
+ * an in-window toast when notifications are disabled or unavailable.
+ */
+async showNotification(title: string, body: string | null, isError: boolean) : Promise<boolean> {
+    return await TAURI_INVOKE("show_notification", { title, body, isError });
+},
 async getDefaultExcludedWindows() : Promise<WindowExclusion[]> {
     return await TAURI_INVOKE("get_default_excluded_windows");
 },

@@ -1,4 +1,4 @@
-import { cn, toast } from "@quiro/ui";
+import { cn } from "@quiro/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -32,6 +32,7 @@ import {
 	type MicrophoneWithDetails,
 	useStableDevicesQuery,
 } from "@/utils/devices";
+import { notify } from "@/utils/notify";
 import { captureTauriResult } from "@/utils/posthog";
 import {
 	createCameraMutation,
@@ -82,7 +83,7 @@ async function openDebugWindow() {
 		await commands.showWindow("Debug");
 	} catch (error) {
 		console.error("Failed to open debug window:", error);
-		toast.error("Failed to open debug window");
+		notify.error("Failed to open debug window");
 	}
 }
 
@@ -319,7 +320,7 @@ export function LaunchRoutePage() {
 			setOptions({ targetMode: null, targetModeDismissal: "cancelled" });
 			navigate(toolbar ? "/" : "/?launchWindow=toolbar", { replace: true });
 		} catch (error) {
-			toast.error(`Unable to switch launch window: ${error}`);
+			notify.error(`Unable to switch launch window: ${error}`);
 		} finally {
 			switchPending.current = false;
 		}
@@ -331,14 +332,14 @@ export function LaunchRoutePage() {
 		try {
 			const update = await check();
 			if (update) {
-				toast.success(
+				notify.success(
 					`Version ${update.version} is available. Open Settings to update.`,
 				);
 			} else {
-				toast.success("Quiro is up to date.");
+				notify.success("Quiro is up to date.");
 			}
 		} catch (error) {
-			toast.error(`Couldn't check for updates: ${error}`);
+			notify.error(`Couldn't check for updates: ${error}`);
 		} finally {
 			updateCheckPending.current = false;
 		}
@@ -367,9 +368,9 @@ export function LaunchRoutePage() {
 		void commands
 			.startRecording(rawOptions.captureTarget)
 			.then((result) => {
-				if (result.status === "error") toast.error(result.error);
+				if (result.status === "error") notify.error(result.error);
 			})
-			.catch(() => toast.error("Failed to start recording"))
+			.catch(() => notify.error("Failed to start recording"))
 			.finally(() => {
 				shortcutPending.current = false;
 			});
@@ -394,7 +395,7 @@ export function LaunchRoutePage() {
 				if (result.status === "error") throw new Error(String(result.error));
 				setOptions({ targetMode: mode, targetModeSource: "main" });
 			} catch (error) {
-				toast.error(
+				notify.error(
 					error instanceof Error
 						? error.message
 						: "Failed to open capture picker",
@@ -616,7 +617,7 @@ export function LaunchRoutePage() {
 				);
 			})
 			.catch((error) => {
-				toast.error(`Unable to resize launch window: ${error}`);
+				notify.error(`Unable to resize launch window: ${error}`);
 			});
 		return () => {
 			cancelled = true;
@@ -687,7 +688,7 @@ export function LaunchRoutePage() {
 			})
 			.catch((error) => {
 				if (!cancelled) {
-					toast.error(`Unable to open the recording editor: ${error}`);
+					notify.error(`Unable to open the recording editor: ${error}`);
 				}
 			});
 
@@ -706,7 +707,7 @@ export function LaunchRoutePage() {
 		switch (event.variant) {
 			case "StartFailed":
 			case "Failed":
-				toast.error(`Recording failed: ${event.error}`);
+				notify.error(`Recording failed: ${event.error}`);
 				break;
 			case "Stopped":
 				void queryClient.invalidateQueries({
@@ -1281,7 +1282,7 @@ export function LaunchRoutePage() {
 										delays[(index + 1) % delays.length] || null,
 								})
 								.catch((error) =>
-									toast.error(`Unable to save delay: ${error}`),
+									notify.error(`Unable to save delay: ${error}`),
 								);
 						}}
 						onSettings={() => {
@@ -1336,7 +1337,7 @@ export function LaunchRoutePage() {
 							});
 						})
 						.catch((error) =>
-							toast.error(`Unable to change capture mode: ${error}`),
+							notify.error(`Unable to change capture mode: ${error}`),
 						)
 						.finally(() => {
 							shortcutPending.current = false;
@@ -1344,7 +1345,7 @@ export function LaunchRoutePage() {
 				}}
 				onTarget={(mode) => {
 					void toggleTargetMode(mode).catch((error) =>
-						toast.error(`Unable to open picker: ${error}`),
+						notify.error(`Unable to open picker: ${error}`),
 					);
 				}}
 				onBrowse={(mode) => {

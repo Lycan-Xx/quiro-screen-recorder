@@ -1,9 +1,10 @@
-import { Button, toast } from "@quiro/ui";
+import { Button } from "@quiro/ui";
 import { useQuery } from "@tanstack/react-query";
 import { getVersion } from "@tauri-apps/api/app";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
+import { notify } from "@/utils/notify";
 import { commands } from "@/utils/tauri";
 import IconLucideCopy from "~icons/lucide/copy";
 import IconLucideFolder from "~icons/lucide/folder";
@@ -74,7 +75,7 @@ export default function FeedbackSettings() {
 			await openUrl(href);
 		} catch (error) {
 			console.error("Failed to open mail client:", error);
-			toast.error("Couldn't open your mail client");
+			notify.error("Couldn't open your mail client");
 		}
 	};
 
@@ -82,10 +83,10 @@ export default function FeedbackSettings() {
 		if (!diagnostics.data) return;
 		try {
 			await writeText(diagnosticsToText(diagnostics.data));
-			toast.success("Diagnostics copied to clipboard");
+			notify.success("Diagnostics copied to clipboard");
 		} catch (error) {
 			console.error("Failed to copy diagnostics:", error);
-			toast.error("Failed to copy diagnostics");
+			notify.error("Failed to copy diagnostics");
 		}
 	};
 
@@ -95,7 +96,7 @@ export default function FeedbackSettings() {
 			await revealItemInDir(logsDir.data);
 		} catch (error) {
 			console.error("Failed to reveal logs folder:", error);
-			toast.error("Couldn't open the logs folder");
+			notify.error("Couldn't open the logs folder");
 		}
 	};
 

@@ -1,4 +1,4 @@
-import { cn, toast } from "@quiro/ui";
+import { cn } from "@quiro/ui";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Image } from "@tauri-apps/api/image";
 import { writeImage } from "@tauri-apps/plugin-clipboard-manager";
@@ -14,6 +14,7 @@ import {
 } from "react";
 import { openMediaFile } from "@/components/LibraryMenu";
 import { Tooltip } from "@/components/Tooltip";
+import { notify } from "@/utils/notify";
 import type { RecordingWithPath, ScreenshotWithPath } from "@/utils/queries";
 import type {
 	CaptureDisplayWithThumbnail,
@@ -187,10 +188,10 @@ export default function TargetCard(props: TargetCardProps) {
 		try {
 			const image = await Image.fromPath(screenshotTarget.path);
 			await writeImage(image);
-			toast.success("Screenshot copied to clipboard");
+			notify.success("Screenshot copied to clipboard");
 		} catch (error) {
 			console.error("Failed to copy screenshot:", error);
-			toast.error("Failed to copy screenshot");
+			notify.error("Failed to copy screenshot");
 		}
 	};
 
@@ -204,10 +205,10 @@ export default function TargetCard(props: TargetCardProps) {
 			});
 			if (!path) return;
 			await copyFile(screenshotTarget.path, path);
-			toast.success("Screenshot saved");
+			notify.success("Screenshot saved");
 		} catch (error) {
 			console.error("Failed to save screenshot:", error);
-			toast.error("Failed to save screenshot");
+			notify.error("Failed to save screenshot");
 		}
 	};
 
@@ -216,7 +217,7 @@ export default function TargetCard(props: TargetCardProps) {
 		if (!recordingTarget) return;
 		revealItemInDir(recordingTarget.projectPath).catch((error) => {
 			console.error("Failed to open recording folder:", error);
-			toast.error("Failed to open folder");
+			notify.error("Failed to open folder");
 		});
 	};
 
@@ -229,7 +230,7 @@ export default function TargetCard(props: TargetCardProps) {
 			onRefetch?.();
 		} catch (error) {
 			console.error("Failed to delete recording:", error);
-			toast.error("Failed to delete recording");
+			notify.error("Failed to delete recording");
 		}
 	};
 
@@ -240,11 +241,11 @@ export default function TargetCard(props: TargetCardProps) {
 			return;
 		try {
 			await remove(screenshotTarget.path);
-			toast.success("Screenshot deleted");
+			notify.success("Screenshot deleted");
 			onRefetch?.();
 		} catch (error) {
 			console.error("Failed to delete screenshot:", error);
-			toast.error("Failed to delete screenshot");
+			notify.error("Failed to delete screenshot");
 		}
 	};
 
