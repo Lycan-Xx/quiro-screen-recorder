@@ -10,6 +10,8 @@ changes.
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-10-13
+
 ### Fixed
 
 - Choosing a microphone is near-instant on devices with slow format probing,
