@@ -10,6 +10,8 @@ changes.
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-13
+
 ### Fixed
 
 - Starting a recording soon after choosing a microphone no longer fails with
